@@ -11,7 +11,7 @@ const C: u64 = 640320;
 const D: u64 = 426880;
 const E: u64 = 10005;
 const C3_24: u64 = C.pow(3) / 24;
-const THRESH: u64 = 10u64.pow(5);
+const THRESH: u64 = 10u64.pow(3);
 
 struct PQT {
     p: gmp::mpz_t,
@@ -178,15 +178,15 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
         q: allocate_mpz(0),
         t: allocate_mpz(0),
     };
-    let mut t_1 = WrappedMpz { a: allocate_mpz(0) };
-    let mut t_2 = WrappedMpz { a: allocate_mpz(0) };
+    let t_1 = WrappedMpz { a: allocate_mpz(0) };
+    let t_2 = WrappedMpz { a: allocate_mpz(0) };
     unsafe {
         let m = (n1 + n2) / 2;
         let mut res1: PQT;
         let mut res2: PQT;
         if n2 - n1 < THRESH {
-            res1 = compute_pqt(n1, m).await;
-            res2 = compute_pqt(m, n2).await;
+            res1 = i_compute_pqt(n1, m);
+            res2 = i_compute_pqt(m, n2);
         } else {
             // single thread
             //let mut res1 = compute_pqt(n1, m).await; // res1 is used as a temp buffer to reduce mem
@@ -214,6 +214,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
                 &wrap.b as *const mpz_t,
                 &wrap.c as *const mpz_t,
             );
+            WrappedMpz { a: wrap.a }
         });
         // let p_thread = tokio::spawn(move || wrap_mul(wrap_p));
         //let p_thread = tokio::spawn(move || {
@@ -232,6 +233,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
                 &wrap.b as *const mpz_t,
                 &wrap.c as *const mpz_t,
             );
+            WrappedMpz { a: wrap.a }
         });
         // let q_thread = tokio::spawn(move || wrap_mul(wrap_q));
         //let q_thread = tokio::spawn(move || {
@@ -253,6 +255,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
                 &wrap.b as *const mpz_t,
                 &wrap.c as *const mpz_t,
             );
+            WrappedMpz { a: wrap.a }
         });
         // let t_1_thread = tokio::spawn(move || wrap_mul(wrap_t_1));
         //let t_1_thread = tokio::spawn(move || {
@@ -272,20 +275,21 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
                 &wrap.b as *const mpz_t,
                 &wrap.c as *const mpz_t,
             );
+            WrappedMpz { a: wrap.a }
         });
         // let t_2_thread = tokio::spawn(move || wrap_mul(wrap_t_2));
         //let t_2_thread = tokio::spawn(move || {
         //    wrap_mul(t_2_wrap);
         //});
-        let _ = t_1_handle.await.unwrap();
-        let _ = t_2_handle.await.unwrap();
-        gmp::mpz_mul(
+        let mut t_1 = t_1_handle.await.unwrap();
+        let mut t_2 = t_2_handle.await.unwrap();
+        gmp::mpz_add(
             &mut pqt.t as *mut mpz_t,
             &t_1.a as *const mpz_t,
             &t_2.a as *const mpz_t,
         );
-        let _ = p_thread.await.unwrap();
-        let _ = q_thread.await.unwrap();
+        pqt.p = p_thread.await.unwrap().a;
+        pqt.q = q_thread.await.unwrap().a;
         println!("2 {}", make_cstr_mpz(res1.p));
         gmp::mpz_clear(&mut res1.p);
         gmp::mpz_clear(&mut res1.q);
@@ -299,7 +303,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
     pqt
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let digits = env::args().nth(1).unwrap().parse::<u32>().unwrap();
     println!("Computing {} digits", digits);
@@ -311,9 +315,15 @@ async fn main() {
         let mut c3_24 = allocate_mpz(C);
         gmp::mpz_pow_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 3);
         gmp::mpz_divexact_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 24);
-        //let pqt: PQT = compute_pqt(0u64, n as u64).await;
-        let pqt: PQT = i_compute_pqt(0u64, n as u64);
+        let pqt: PQT = compute_pqt(0u64, n as u64).await;
+        // let pqt: PQT = i_compute_pqt(0u64, n as u64);
         println!("pqt done");
+        println!(
+            "{}\n{}\n{}",
+            make_cstr_mpz(pqt.p),
+            make_cstr_mpz(pqt.q),
+            make_cstr_mpz(pqt.t)
+        );
         let mut pi = allocate_mpf(0, prec);
         let mut e = allocate_mpf(E, prec); // ei
         let mut q = allocate_mpf(0, prec);
