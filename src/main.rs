@@ -11,7 +11,7 @@ const C: u64 = 640320;
 const D: u64 = 426880;
 const E: u64 = 10005;
 const C3_24: u64 = C.pow(3) / 24;
-const THRESH: u64 = 10u64.pow(3);
+const THRESH: u64 = 10u64.pow(5) * 5;
 
 struct PQT {
     p: gmp::mpz_t,
@@ -23,10 +23,25 @@ struct WrappedMpz {
     a: gmp::mpz_t,
 }
 
+struct WrappedMpf {
+    a: gmp::mpf_t,
+}
+
 struct WrappedMpzTri {
     a: gmp::mpz_t,
     b: gmp::mpz_t,
     c: gmp::mpz_t,
+}
+
+struct WrappedMpzBi {
+    a: gmp::mpz_t,
+    b: gmp::mpz_t,
+}
+
+struct WrappedMpfTri {
+    a: gmp::mpf_t,
+    b: gmp::mpf_t,
+    c: gmp::mpf_t,
 }
 
 unsafe impl Send for PQT {} // luckily, im not accessing anything between threads
@@ -35,8 +50,12 @@ impl Default for WrappedMpz {
         WrappedMpz { a: allocate_mpz(0) }
     }
 }
+
 unsafe impl Send for WrappedMpz {}
+unsafe impl Send for WrappedMpf {}
 unsafe impl Send for WrappedMpzTri {}
+unsafe impl Send for WrappedMpzBi {}
+unsafe impl Send for WrappedMpfTri {}
 
 fn allocate_mpz(init_value: u64) -> gmp::mpz_t {
     unsafe {
@@ -85,6 +104,106 @@ fn make_cstr_mpz(fmt_str: mpz_t) -> String {
         .to_str()
         .unwrap()
         .to_string()
+    }
+}
+
+async fn calc_sqrt(prec: u64) -> WrappedMpf {
+    unsafe {
+        let mut e = allocate_mpf(E, prec);
+        gmp::mpf_sqrt(&mut e as *mut mpf_t, &e as *const mpf_t);
+        println!("e done");
+        WrappedMpf { a: e }
+    }
+}
+
+async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
+    unsafe {
+        let (mut x, mut y) = (allocate_mpz(0), allocate_mpz(0));
+        let (mut x1, mut y1) = (allocate_mpz(1u64), allocate_mpz(0u64));
+        let (mut x2, mut y2) = (allocate_mpz(4001u64), allocate_mpz(40u64));
+        let mut tmp = allocate_mpz(0);
+        let mut target = allocate_mpz(10);
+        gmp::mpz_pow_ui(
+            &mut target as *mut mpz_t,
+            &target as *const mpz_t,
+            (prec / 2) + 5,
+        );
+        loop {
+            // x = x1*x2 + D*y1*y2
+            gmp::mpz_mul(
+                &mut tmp as *mut mpz_t,
+                &y1 as *const mpz_t,
+                &y2 as *const mpz_t,
+            );
+            gmp::mpz_mul_ui(&mut tmp as *mut mpz_t, &tmp as *const mpz_t, E);
+            gmp::mpz_mul(
+                &mut x as *mut mpz_t,
+                &x1 as *const mpz_t,
+                &x2 as *const mpz_t,
+            );
+            gmp::mpz_add(
+                &mut x as *mut mpz_t,
+                &x as *const mpz_t,
+                &tmp as *const mpz_t,
+            );
+
+            // y = x1*y2 + y1*x2
+            gmp::mpz_mul(
+                &mut tmp as *mut mpz_t,
+                &y1 as *const mpz_t,
+                &x2 as *const mpz_t,
+            );
+            gmp::mpz_mul(
+                &mut y as *mut mpz_t,
+                &x1 as *const mpz_t,
+                &y2 as *const mpz_t,
+            );
+            gmp::mpz_add(
+                &mut y as *mut mpz_t,
+                &x as *const mpz_t,
+                &tmp as *const mpz_t,
+            );
+
+            if (gmp::mpz_cmp(&y as *const mpz_t, &target as *const mpz_t) > 0) {
+                break;
+            }
+            x1 = x2;
+            y1 = y2;
+            x2 = x;
+            y2 = y;
+        }
+
+        WrappedMpzBi { a: x, b: y }
+    }
+}
+
+async fn mpf_mul(mut wrap: WrappedMpfTri) -> WrappedMpf {
+    unsafe {
+        gmp::mpf_mul(
+            &mut wrap.a as *mut mpf_t,
+            &wrap.b as *const mpf_t,
+            &wrap.c as *const mpf_t,
+        );
+        WrappedMpf { a: wrap.a }
+    }
+}
+
+async fn mpf_add(mut wrap: WrappedMpfTri) -> WrappedMpf {
+    unsafe {
+        gmp::mpf_add(
+            &mut wrap.a as *mut mpf_t,
+            &wrap.b as *const mpf_t,
+            &wrap.c as *const mpf_t,
+        );
+        WrappedMpf { a: wrap.a }
+    }
+}
+
+async fn mpf_cast(wrap: WrappedMpz, prec: u64) -> WrappedMpf {
+    unsafe {
+        let mut cast = allocate_mpf(0, prec);
+        gmp::mpf_set_z(&mut cast as *mut mpf_t, &wrap.a as *const mpz_t);
+        WrappedMpf { a: cast }
     }
 }
 
@@ -197,8 +316,8 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
             res1 = res1_hook.await.unwrap();
             res2 = res2_hook.await.unwrap();
         }
-        if n2 - n1 > 1000000 {
-            println!("{}", n2);
+        if n2 - n1 > THRESH {
+            println!("{}", n2 - n1);
         }
         // p = res1 p * res2 p
         let wrap_p = WrappedMpzTri {
@@ -290,7 +409,6 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
         );
         pqt.p = p_thread.await.unwrap().a;
         pqt.q = q_thread.await.unwrap().a;
-        println!("2 {}", make_cstr_mpz(res1.p));
         gmp::mpz_clear(&mut res1.p);
         gmp::mpz_clear(&mut res1.q);
         gmp::mpz_clear(&mut res1.t);
@@ -303,7 +421,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
     pqt
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 50)]
 async fn main() {
     let digits = env::args().nth(1).unwrap().parse::<u32>().unwrap();
     println!("Computing {} digits", digits);
@@ -312,47 +430,102 @@ async fn main() {
     let digits_per_term = (53360f64.powf(3f64).ln()) / 10f64.ln();
     let n = digits as f64 / digits_per_term;
     unsafe {
+        let e_handle = thread::spawn(async move || calc_sqrt(prec));
         let mut c3_24 = allocate_mpz(C);
         gmp::mpz_pow_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 3);
         gmp::mpz_divexact_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 24);
         let pqt: PQT = compute_pqt(0u64, n as u64).await;
         // let pqt: PQT = i_compute_pqt(0u64, n as u64);
         println!("pqt done");
-        println!(
-            "{}\n{}\n{}",
-            make_cstr_mpz(pqt.p),
-            make_cstr_mpz(pqt.q),
-            make_cstr_mpz(pqt.t)
-        );
+        let wrap_q = WrappedMpz { a: pqt.q };
+        let wrap_t = WrappedMpz { a: pqt.t };
+        let q_handle = tokio::spawn(async move {
+            let q = mpf_cast(wrap_q, prec).await.a;
+            let wrap_q_mpf = WrappedMpf { a: q };
+            let mut q_clone = allocate_mpf(0, prec);
+            gmp::mpf_set(&mut q_clone, &q as *const mpf_t);
+            let wrap_q_mpf_clone = WrappedMpf { a: q_clone };
+            let d_handle = tokio::spawn(async move {
+                let mut d = allocate_mpf(D, prec);
+                let q = wrap_q_mpf;
+                let wrap = WrappedMpfTri { a: d, b: d, c: q.a };
+                d = mpf_mul(wrap).await.a;
+                // println!("d done");
+                WrappedMpf { a: d }
+            });
+            let a_handle = tokio::spawn(async move {
+                let mut a = allocate_mpf(A, prec);
+                let q = wrap_q_mpf_clone;
+                let wrap = WrappedMpfTri { a: a, b: a, c: q.a };
+                a = mpf_mul(wrap).await.a;
+                println!("a done");
+                WrappedMpf { a: a }
+            });
+            (d_handle, a_handle)
+        });
+        let t_handle = tokio::spawn(async move { mpf_cast(wrap_t, prec).await });
+        let (d_handle, a_handle) = q_handle.await.unwrap();
+        let top_handle = tokio::spawn(async {
+            let e_grip = e_handle.join().unwrap();
+            let d_grip = d_handle.await.unwrap();
+            let mut e = e_grip.await.await.a;
+            let d = d_grip.a;
+            gmp::mpf_mul(&mut e as *mut mpf_t, &e as *const mpf_t, &d as *const mpf_t);
+            // println!("top done");
+            WrappedMpf { a: e }
+        });
+        let bottom_handle = tokio::spawn(async {
+            let a_grip = a_handle.await.unwrap();
+            let t_grip = t_handle.await.unwrap();
+            let mut a = a_grip.a;
+            let t = t_grip;
+            // println!("a t {} {}", make_cstr_mpf(a, 100), make_cstr_mpf(t.a, 100));
+            gmp::mpf_add(
+                &mut a as *mut mpf_t,
+                &a as *const mpf_t,
+                &t.a as *const mpf_t,
+            );
+            // println!("bottom done");
+            WrappedMpf { a: a }
+        });
         let mut pi = allocate_mpf(0, prec);
-        let mut e = allocate_mpf(E, prec); // ei
-        let mut q = allocate_mpf(0, prec);
-        let mut t = allocate_mpf(0, prec);
-        gmp::mpf_set_z(&mut q as *mut mpf_t, &pqt.q as *const mpz_t);
-        gmp::mpf_set_z(&mut t as *mut mpf_t, &pqt.t as *const mpz_t);
-        println!("casts done");
-        gmp::mpf_sqrt(&mut e as *mut mpf_t, &e as *const mpf_t);
-        println!("sqrt done");
-        gmp::mpf_mul(&mut e as *mut mpf_t, &e as *const mpf_t, &q as *const mpf_t);
-        println!("mul1 done");
-        gmp::mpf_mul(
-            &mut pi as *mut mpf_t,
-            &e as *const mpf_t,
-            &allocate_mpf(D, prec) as *const mpf_t, // d
-        );
-        println!("mul2 done");
-        // e is not representative here. just saving mem
-        gmp::mpf_mul(
-            &mut e as *mut mpf_t,
-            &q as *const mpf_t,
-            &allocate_mpf(A, prec) as *const mpf_t,
-        );
-        gmp::mpf_add(&mut e as *mut mpf_t, &e as *const mpf_t, &t as *const mpf_t);
+        let top = top_handle.await.unwrap().a;
+        let bottom = bottom_handle.await.unwrap().a;
+        // println!("meow {}", make_cstr_mpf(bottom, 100));
         gmp::mpf_div(
             &mut pi as *mut mpf_t,
-            &pi as *const mpf_t,
-            &e as *const mpf_t,
+            &top as *const mpf_t,
+            &bottom as *const mpf_t,
         );
+        //println!("casts done");
+        //gmp::mpf_sqrt(&mut e as *mut mpf_t, &e as *const mpf_t);
+        //println!("sqrt done");
+        //gmp::mpf_mul(&mut e as *mut mpf_t, &e as *const mpf_t, &q as *const mpf_t);
+        // let d_hook = tokio::spawn(async { mpf_mul(WrappedMpfTri { a: d, b: d, c: q }) });
+        // gmp::mpf_mul(
+        //     &mut d as *mut mpf_t,
+        //     &d as *const mpf_t,
+        //     &pqt.t as *const mpf_t,
+        // );
+        // println!("mul1 done");
+        // gmp::mpf_mul(
+        //     &mut pi as *mut mpf_t,
+        //     &e as *const mpf_t,
+        //     &allocate_mpf(D, prec) as *const mpf_t, // d
+        // );
+        // println!("mul2 done");
+        // // e is not representative here. just saving mem
+        // gmp::mpf_mul(
+        //     &mut e as *mut mpf_t,
+        //     &q as *const mpf_t,
+        //     &allocate_mpf(A, prec) as *const mpf_t,
+        // );
+        // gmp::mpf_add(&mut e as *mut mpf_t, &e as *const mpf_t, &t as *const mpf_t);
+        // gmp::mpf_div(
+        //     &mut pi as *mut mpf_t,
+        //     &pi as *const mpf_t,
+        //     &e as *const mpf_t,
+        // );
         println!("computed, making string");
         let printout = make_cstr_mpf(pi, digits as usize);
         println!("{printout}");
