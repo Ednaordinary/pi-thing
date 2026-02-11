@@ -33,11 +33,6 @@ struct WrappedMpzTri {
     c: gmp::mpz_t,
 }
 
-struct WrappedMpzBi {
-    a: gmp::mpz_t,
-    b: gmp::mpz_t,
-}
-
 struct WrappedMpfTri {
     a: gmp::mpf_t,
     b: gmp::mpf_t,
@@ -54,7 +49,6 @@ impl Default for WrappedMpz {
 unsafe impl Send for WrappedMpz {}
 unsafe impl Send for WrappedMpf {}
 unsafe impl Send for WrappedMpzTri {}
-unsafe impl Send for WrappedMpzBi {}
 unsafe impl Send for WrappedMpfTri {}
 
 fn allocate_mpz(init_value: u64) -> gmp::mpz_t {
@@ -116,7 +110,7 @@ async fn calc_sqrt(prec: u64) -> WrappedMpf {
     }
 }
 
-async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
+async fn calc_sqrt_pell(prec: u64) -> (WrappedMpz, WrappedMpz) {
     unsafe {
         let (mut x, mut y) = (allocate_mpz(0), allocate_mpz(0));
         let (mut x1, mut y1) = (allocate_mpz(1u64), allocate_mpz(0u64));
@@ -160,20 +154,21 @@ async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
             );
             gmp::mpz_add(
                 &mut y as *mut mpz_t,
-                &x as *const mpz_t,
+                &y as *const mpz_t,
                 &tmp as *const mpz_t,
             );
 
-            if (gmp::mpz_cmp(&y as *const mpz_t, &target as *const mpz_t) > 0) {
+            if gmp::mpz_cmp(&y as *const mpz_t, &target as *const mpz_t) > 0 {
+                // should dealloc memory here
                 break;
             }
-            x1 = x2;
-            y1 = y2;
-            x2 = x;
-            y2 = y;
+            gmp::mpz_set(&mut x1 as *mut mpz_t, &x2 as *const mpz_t);
+            gmp::mpz_set(&mut y1 as *mut mpz_t, &y2 as *const mpz_t);
+            gmp::mpz_set(&mut x2 as *mut mpz_t, &x as *const mpz_t);
+            gmp::mpz_set(&mut y2 as *mut mpz_t, &y as *const mpz_t);
         }
-
-        WrappedMpzBi { a: x, b: y }
+        println!("e done");
+        (WrappedMpz { a: x }, WrappedMpz { a: y })
     }
 }
 
@@ -430,7 +425,8 @@ async fn main() {
     let digits_per_term = (53360f64.powf(3f64).ln()) / 10f64.ln();
     let n = digits as f64 / digits_per_term;
     unsafe {
-        let e_handle = thread::spawn(async move || calc_sqrt(prec));
+        let e_handle = tokio::spawn(async move { calc_sqrt_pell(digits as u64) });
+        // let e_handle = thread::spawn(async move || calc_sqrt_pell(digits as u64));
         let mut c3_24 = allocate_mpz(C);
         gmp::mpz_pow_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 3);
         gmp::mpz_divexact_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 24);
@@ -465,15 +461,15 @@ async fn main() {
         });
         let t_handle = tokio::spawn(async move { mpf_cast(wrap_t, prec).await });
         let (d_handle, a_handle) = q_handle.await.unwrap();
-        let top_handle = tokio::spawn(async {
-            let e_grip = e_handle.join().unwrap();
-            let d_grip = d_handle.await.unwrap();
-            let mut e = e_grip.await.await.a;
-            let d = d_grip.a;
-            gmp::mpf_mul(&mut e as *mut mpf_t, &e as *const mpf_t, &d as *const mpf_t);
-            // println!("top done");
-            WrappedMpf { a: e }
-        });
+        // let top_handle = tokio::spawn(async {
+        //     let e_grip = e_handle.await.unwrap();
+        //     let d_grip = d_handle.await.unwrap();
+        //     let mut e = e_grip.await.a;
+        //     let d = d_grip.a;
+        //     gmp::mpf_mul(&mut e as *mut mpf_t, &e as *const mpf_t, &d as *const mpf_t);
+        //     // println!("top done");
+        //     WrappedMpf { a: e }
+        // });
         let bottom_handle = tokio::spawn(async {
             let a_grip = a_handle.await.unwrap();
             let t_grip = t_handle.await.unwrap();
@@ -488,9 +484,35 @@ async fn main() {
             // println!("bottom done");
             WrappedMpf { a: a }
         });
+        // let e_comp = e_handle.join().unwrap().await.await;
+        let e_comp = e_handle.await.unwrap().await;
+        let (e_x, e_y) = e_comp;
+        // println!("{} {}", make_cstr_mpz(e_x.a), make_cstr_mpz(e_y.a));
+        let top_handle = tokio::spawn(async {
+            let e_x_mpf = mpf_cast(e_x, 0u64).await;
+            let d_grip = d_handle.await.unwrap();
+            let mut d = d_grip.a;
+            gmp::mpf_mul(
+                &mut d as *mut mpf_t,
+                &e_x_mpf.a as *const mpf_t,
+                &d as *const mpf_t,
+            );
+            // println!("top done");
+            WrappedMpf { a: d }
+        });
         let mut pi = allocate_mpf(0, prec);
+        let bottom_mul_handle = tokio::spawn(async {
+            let e_y_mpf = mpf_cast(e_y, 0u64).await;
+            let mut bottom = bottom_handle.await.unwrap().a;
+            gmp::mpf_mul(
+                &mut bottom as *mut mpf_t,
+                &bottom as *const mpf_t,
+                &e_y_mpf.a as *const mpf_t,
+            );
+            WrappedMpf { a: bottom }
+        });
         let top = top_handle.await.unwrap().a;
-        let bottom = bottom_handle.await.unwrap().a;
+        let bottom = bottom_mul_handle.await.unwrap().a;
         // println!("meow {}", make_cstr_mpf(bottom, 100));
         gmp::mpf_div(
             &mut pi as *mut mpf_t,
@@ -526,8 +548,8 @@ async fn main() {
         //     &pi as *const mpf_t,
         //     &e as *const mpf_t,
         // );
-        println!("computed, making string");
-        let printout = make_cstr_mpf(pi, digits as usize);
-        println!("{printout}");
+        // println!("computed, making string");
+        // let printout = make_cstr_mpf(pi, digits as usize);
+        // println!("{printout}");
     }
 }
