@@ -27,6 +27,11 @@ struct WrappedMpf {
     a: gmp::mpf_t,
 }
 
+struct WrappedMpzBi {
+    a: gmp::mpz_t,
+    b: gmp::mpz_t,
+}
+
 struct WrappedMpzTri {
     a: gmp::mpz_t,
     b: gmp::mpz_t,
@@ -48,6 +53,7 @@ impl Default for WrappedMpz {
 
 unsafe impl Send for WrappedMpz {}
 unsafe impl Send for WrappedMpf {}
+unsafe impl Send for WrappedMpzBi {}
 unsafe impl Send for WrappedMpzTri {}
 unsafe impl Send for WrappedMpfTri {}
 
@@ -110,7 +116,8 @@ async fn calc_sqrt(prec: u64) -> WrappedMpf {
     }
 }
 
-async fn calc_sqrt_pell(prec: u64) -> (WrappedMpz, WrappedMpz) {
+#[async_recursion::async_recursion]
+async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
     unsafe {
         let (mut x, mut y) = (allocate_mpz(0), allocate_mpz(0));
         let (mut x1, mut y1) = (allocate_mpz(1u64), allocate_mpz(0u64));
@@ -124,22 +131,33 @@ async fn calc_sqrt_pell(prec: u64) -> (WrappedMpz, WrappedMpz) {
         );
         loop {
             // x = x1*x2 + D*y1*y2
-            gmp::mpz_mul(
-                &mut tmp as *mut mpz_t,
-                &y1 as *const mpz_t,
-                &y2 as *const mpz_t,
-            );
-            gmp::mpz_mul_ui(&mut tmp as *mut mpz_t, &tmp as *const mpz_t, E);
-            gmp::mpz_mul(
-                &mut x as *mut mpz_t,
-                &x1 as *const mpz_t,
-                &x2 as *const mpz_t,
-            );
-            gmp::mpz_add(
-                &mut x as *mut mpz_t,
-                &x as *const mpz_t,
-                &tmp as *const mpz_t,
-            );
+            let x1_wrap = WrappedMpz { a: x1 };
+            let x2_wrap = WrappedMpz { a: x2 };
+            let x_1_c_handle = tokio::spawn(async {
+                let mut tmp = allocate_mpz(0);
+                let x1 = x1_wrap;
+                let x2 = x2_wrap;
+                gmp::mpz_mul(
+                    &mut tmp as *mut mpz_t,
+                    &x1.a as *const mpz_t,
+                    &x2.a as *const mpz_t,
+                );
+                WrappedMpz { a: tmp }
+            });
+            let y1_wrap = WrappedMpz { a: y1 };
+            let y2_wrap = WrappedMpz { a: y2 };
+            let x_2_c_handle = tokio::spawn(async {
+                let mut tmp = allocate_mpz(0);
+                let y1 = y1_wrap;
+                let y2 = y2_wrap;
+                gmp::mpz_mul(
+                    &mut tmp as *mut mpz_t,
+                    &y1.a as *const mpz_t,
+                    &y2.a as *const mpz_t,
+                );
+                gmp::mpz_mul_ui(&mut tmp as *mut mpz_t, &tmp as *const mpz_t, E);
+                WrappedMpz { a: tmp }
+            });
 
             // y = x1*y2 + y1*x2
             gmp::mpz_mul(
@@ -157,7 +175,62 @@ async fn calc_sqrt_pell(prec: u64) -> (WrappedMpz, WrappedMpz) {
                 &y as *const mpz_t,
                 &tmp as *const mpz_t,
             );
-
+            let x1_wrap = WrappedMpz { a: x1 };
+            let y2_wrap = WrappedMpz { a: y2 };
+            let y_1_c_handle = tokio::spawn(async {
+                let mut tmp = allocate_mpz(0);
+                let x1 = x1_wrap;
+                let y2 = y2_wrap;
+                gmp::mpz_mul(
+                    &mut tmp as *mut mpz_t,
+                    &x1.a as *const mpz_t,
+                    &y2.a as *const mpz_t,
+                );
+                WrappedMpz { a: tmp }
+            });
+            let y1_wrap = WrappedMpz { a: y1 };
+            let x2_wrap = WrappedMpz { a: x2 };
+            let y_2_c_handle = tokio::spawn(async {
+                let mut tmp = allocate_mpz(0);
+                let y1 = y1_wrap;
+                let x2 = x2_wrap;
+                gmp::mpz_mul(
+                    &mut tmp as *mut mpz_t,
+                    &y1.a as *const mpz_t,
+                    &x2.a as *const mpz_t,
+                );
+                WrappedMpz { a: tmp }
+            });
+            //(x, y) = {
+            let x_handle = tokio::spawn(async move {
+                let x_1_c = x_1_c_handle.await.expect("moew");
+                let x_2_c = x_2_c_handle.await.expect("meow");
+                let mut tmp = allocate_mpz(0);
+                gmp::mpz_add(
+                    &mut tmp as *mut mpz_t,
+                    &x_1_c.a as *const mpz_t,
+                    &x_2_c.a as *const mpz_t,
+                );
+                WrappedMpz { a: tmp }
+            });
+            let y_handle = tokio::spawn(async {
+                let y_1_c = y_1_c_handle.await;
+                let y_2_c = y_2_c_handle.await;
+                let mut tmp = allocate_mpz(0);
+                gmp::mpz_add(
+                    &mut tmp as *mut mpz_t,
+                    &y_1_c.unwrap().a as *const mpz_t,
+                    &y_2_c.unwrap().a as *const mpz_t,
+                );
+                WrappedMpz { a: tmp }
+            });
+            // let y_h = y_handle.await;
+            let x_r = x_handle.await.unwrap().a;
+            let y_r = y_handle.await.unwrap().a;
+            gmp::mpz_set(&mut x as *mut mpz_t, &x_r as *const mpz_t);
+            gmp::mpz_set(&mut y as *mut mpz_t, &y_r as *const mpz_t);
+            //(x, y)
+            //};
             if gmp::mpz_cmp(&y as *const mpz_t, &target as *const mpz_t) > 0 {
                 // should dealloc memory here
                 break;
@@ -168,7 +241,7 @@ async fn calc_sqrt_pell(prec: u64) -> (WrappedMpz, WrappedMpz) {
             gmp::mpz_set(&mut y2 as *mut mpz_t, &y as *const mpz_t);
         }
         println!("e done");
-        (WrappedMpz { a: x }, WrappedMpz { a: y })
+        WrappedMpzBi { a: x, b: y }
     }
 }
 
@@ -425,7 +498,7 @@ async fn main() {
     let digits_per_term = (53360f64.powf(3f64).ln()) / 10f64.ln();
     let n = digits as f64 / digits_per_term;
     unsafe {
-        let e_handle = tokio::spawn(async move { calc_sqrt_pell(digits as u64) });
+        let e_handle = tokio::spawn(async move { calc_sqrt_pell(digits as u64).await });
         // let e_handle = thread::spawn(async move || calc_sqrt_pell(digits as u64));
         let mut c3_24 = allocate_mpz(C);
         gmp::mpz_pow_ui(&mut c3_24 as *mut mpz_t, &c3_24 as *const mpz_t, 3);
@@ -485,8 +558,10 @@ async fn main() {
             WrappedMpf { a: a }
         });
         // let e_comp = e_handle.join().unwrap().await.await;
-        let e_comp = e_handle.await.unwrap().await;
-        let (e_x, e_y) = e_comp;
+        let e_comp = e_handle.await.unwrap();
+        let e_f = e_comp;
+        let e_x = WrappedMpz { a: e_f.a };
+        let e_y = WrappedMpz { a: e_f.b };
         // println!("{} {}", make_cstr_mpz(e_x.a), make_cstr_mpz(e_y.a));
         let top_handle = tokio::spawn(async {
             let e_x_mpf = mpf_cast(e_x, 0u64).await;
