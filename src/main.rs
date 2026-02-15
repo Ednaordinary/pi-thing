@@ -11,7 +11,7 @@ const C: u64 = 640320;
 const D: u64 = 426880;
 const E: u64 = 10005;
 const C3_24: u64 = C.pow(3) / 24;
-const THRESH: u64 = 10u64.pow(5) * 5;
+const THRESH: u64 = 10u64.pow(6) * 5;
 
 struct PQT {
     p: gmp::mpz_t,
@@ -172,21 +172,6 @@ async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
             });
 
             // y = x1*y2 + y1*x2
-            gmp::mpz_mul(
-                &mut tmp.a as *mut mpz_t,
-                &p1.b as *const mpz_t,
-                &p2.a as *const mpz_t,
-            );
-            gmp::mpz_mul(
-                &mut xy.b as *mut mpz_t,
-                &p1.a as *const mpz_t,
-                &p2.b as *const mpz_t,
-            );
-            gmp::mpz_add(
-                &mut xy.b as *mut mpz_t,
-                &xy.b as *const mpz_t,
-                &tmp.a as *const mpz_t,
-            );
             let x1_wrap = WrappedMpz { a: p1.a };
             let y2_wrap = WrappedMpz { a: p2.b };
             let y_1_c_handle = tokio::spawn(async {
@@ -652,7 +637,7 @@ async fn main() {
         //     &e as *const mpf_t,
         // );
         // println!("computed, making string");
-        // let printout = make_cstr_mpf(pi, digits as usize);
-        // println!("{printout}");
+        let printout = make_cstr_mpf(pi, digits as usize);
+        println!("{printout}");
     }
 }
