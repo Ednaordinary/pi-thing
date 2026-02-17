@@ -1,14 +1,11 @@
 use core::mem::MaybeUninit;
 use flint_sys;
 //use gmp_mpfr_sys::{gmp, gmp::mpf_t, gmp::mpz_t};
+use flint_sys::flint::fmpq as mpf_t;
+use flint_sys::flint::fmpz as mpz_t;
 use flint_sys::fmpq;
-use flint_sys::fmpq::fmpq as mpf_t;
 use flint_sys::fmpz;
-use flint_sys::fmpz::fmpz as mpz_t;
-use std::sync::Arc;
-use std::thread;
 use std::{env, ffi::CStr};
-use tokio::sync::Mutex;
 
 const A: u64 = 13591409;
 const B: u64 = 545140134;
@@ -16,7 +13,7 @@ const C: u64 = 640320;
 const D: u64 = 426880;
 const E: u64 = 10005;
 const C3_24: u64 = C.pow(3) / 24;
-const THRESH: u64 = 10u64.pow(4) * 5;
+const THRESH: u64 = 10u64.pow(5) * 5;
 
 struct PQT {
     p: mpz_t,
@@ -88,12 +85,12 @@ unsafe fn allocate_mpf(init_value: u64, prec: u64) -> mpf_t {
         let mut z = MaybeUninit::uninit();
         fmpq::fmpq_init(z.as_mut_ptr());
         let mut z = z.assume_init();
-        fmpq::fmpq_set_ui_den1(&mut z, init_value);
+        fmpq::fmpq_set_ui(&mut z, init_value, 1);
         z
     }
 }
 
-fn make_cstr_mpf(fmt_str: mpf_t, digits: usize) -> String {
+fn make_cstr_mpf(fmt_str: mpf_t) -> String {
     let mut expptr: i64 = 0;
     unsafe {
         CStr::from_ptr(fmpq::fmpq_get_str(
@@ -294,7 +291,11 @@ fn mpz_add_ns(mut a: WrappedMpz, b: WrappedMpz, c: WrappedMpz) -> WrappedMpz {
 async fn mpf_cast(wrap: WrappedMpz, prec: u64) -> WrappedMpf {
     unsafe {
         let mut cast = allocate_mpf(0, prec);
-        fmpq::fmpq_set_fmpz_den1(&mut cast as *mut mpf_t, &wrap.a as *const mpz_t);
+        fmpq::fmpq_set_fmpz_frac(
+            &mut cast as *mut mpf_t,
+            &wrap.a as *const mpz_t,
+            &allocate_mpz(0),
+        );
         WrappedMpf { a: cast }
     }
 }
@@ -517,7 +518,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
     pqt
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 50)]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let digits = env::args().nth(1).unwrap().parse::<u32>().unwrap();
     println!("Computing {} digits", digits);
@@ -526,6 +527,8 @@ async fn main() {
     let digits_per_term = (53360f64.powf(3f64).ln()) / 10f64.ln();
     let n = digits as f64 / digits_per_term;
     unsafe {
+        flint_sys::flint::flint_set_num_threads(50);
+        flint_sys::flint::flint_set_num_workers(50);
         let e_handle = tokio::spawn(async move { calc_sqrt_pell(digits as u64).await });
         // let e_handle = thread::spawn(async move || calc_sqrt_pell(digits as u64));
         let mut c3_24 = allocate_mpz(C);
@@ -600,7 +603,7 @@ async fn main() {
                 &e_x_mpf.a as *const mpf_t,
                 &d as *const mpf_t,
             );
-            // println!("top done");
+            println!("top done");
             WrappedMpf { a: d }
         });
         let mut pi = allocate_mpf(0, prec);
@@ -612,16 +615,17 @@ async fn main() {
                 &bottom as *const mpf_t,
                 &e_y_mpf.a as *const mpf_t,
             );
+            println!("bottom done");
             WrappedMpf { a: bottom }
         });
         let top = top_handle.await.unwrap().a;
         let bottom = bottom_mul_handle.await.unwrap().a;
         // println!("meow {}", make_cstr_mpf(bottom, 100));
-        fmpq::fmpq_div(
-            &mut pi as *mut mpf_t,
-            &top as *const mpf_t,
-            &bottom as *const mpf_t,
-        );
+        //fmpq::fmpq_div(
+        //    &mut pi as *mut mpf_t,
+        //    &top as *const mpf_t,
+        //    &bottom as *const mpf_t,
+        //);
         //println!("casts done");
         //fmpq::fmpq_sqrt(&mut e as *mut mpf_t, &e as *const mpf_t);
         //println!("sqrt done");
@@ -652,7 +656,6 @@ async fn main() {
         //     &e as *const mpf_t,
         // );
         println!("computed, making string");
-        let printout = make_cstr_mpf(pi, digits as usize);
-        println!("{printout}");
+        //println!("{}/{}", make_cstr_mpf(top), make_cstr_mpf(bottom));
     }
 }
