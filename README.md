@@ -2,7 +2,7 @@
 Pi solver in rust, async unsafe and fast
 
 todo
-- [ ] make work (currently borked by pell series)
+- [x] make work
 - [x] multi thread
 - [x] add pell series
 - [ ] move to rayon
