@@ -11,7 +11,7 @@ const C: u64 = 640320;
 const D: u64 = 426880;
 const E: u64 = 10005;
 const C3_24: u64 = C.pow(3) / 24;
-const THRESH: u64 = 10u64.pow(6) * 5;
+const THRESH: u64 = 10u64.pow(4) * 5;
 
 struct PQT {
     p: gmp::mpz_t,
@@ -117,7 +117,6 @@ async fn calc_sqrt(prec: u64) -> WrappedMpf {
     }
 }
 
-#[async_recursion::async_recursion]
 async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
     unsafe {
         let mut xy = WrappedMpzBi {
@@ -243,7 +242,7 @@ async fn calc_sqrt_pell(prec: u64) -> WrappedMpzBi {
             gmp::mpz_set(&mut p2.b as *mut mpz_t, &xy.b as *const mpz_t);
         }
         println!("e done");
-        WrappedMpzBi { a: xy.a, b: xy.a }
+        WrappedMpzBi { a: xy.a, b: xy.b }
     }
 }
 
@@ -636,7 +635,7 @@ async fn main() {
         //     &pi as *const mpf_t,
         //     &e as *const mpf_t,
         // );
-        // println!("computed, making string");
+        println!("computed, making string");
         let printout = make_cstr_mpf(pi, digits as usize);
         println!("{printout}");
     }
