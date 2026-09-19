@@ -575,8 +575,8 @@ async fn main() {
         let e_x = WrappedMpz { a: e_f.a };
         let e_y = WrappedMpz { a: e_f.b };
         // println!("{} {}", make_cstr_mpz(e_x.a), make_cstr_mpz(e_y.a));
-        let top_handle = tokio::spawn(async {
-            let e_x_mpf = mpf_cast(e_x, 0u64).await;
+        let top_handle = tokio::spawn(async move {
+            let e_x_mpf = mpf_cast(e_x, prec).await;
             let d_grip = d_handle.await.unwrap();
             let mut d = d_grip.a;
             gmp::mpf_mul(
@@ -588,8 +588,8 @@ async fn main() {
             WrappedMpf { a: d }
         });
         let mut pi = allocate_mpf(0, prec);
-        let bottom_mul_handle = tokio::spawn(async {
-            let e_y_mpf = mpf_cast(e_y, 0u64).await;
+        let bottom_mul_handle = tokio::spawn(async move {
+            let e_y_mpf = mpf_cast(e_y, prec).await;
             let mut bottom = bottom_handle.await.unwrap().a;
             gmp::mpf_mul(
                 &mut bottom as *mut mpf_t,
