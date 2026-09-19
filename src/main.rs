@@ -505,7 +505,7 @@ async fn compute_pqt(n1: u64, n2: u64) -> PQT {
 async fn main() {
     let digits = env::args().nth(1).unwrap().parse::<u32>().unwrap();
     println!("Computing {} digits", digits);
-    let prec = (digits * 10u32.ilog2()) as u64;
+    let prec = (digits as u64 * 4);
     // let comp: Chudnovsky = Chudnovsky::default();
     let digits_per_term = (53360f64.powf(3f64).ln()) / 10f64.ln();
     let n = digits as f64 / digits_per_term;
